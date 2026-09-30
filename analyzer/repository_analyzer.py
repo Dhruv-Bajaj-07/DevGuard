@@ -81,11 +81,13 @@ for file in project_path.rglob("*"):
         if file.suffix in scannable_extensions:
             with open(file, "r") as current_file:
                 content = current_file.read()
-                for line in content.splitlines():
+
+                for line_no, line in enumerate(content.splitlines(), start=1):
                     for keyword in sensitive_keywords:
                         if keyword in line:
-                                print("Sensitive keyword found:", keyword)
-                                print("Scannable:", file.relative_to(project_path))
+                            print("Line number:", line_no)
+                            print("Sensitive keyword found:", keyword)
+                            print("Scannable:", file.relative_to(project_path))
             
     
 print("Project:", project_path.name)
