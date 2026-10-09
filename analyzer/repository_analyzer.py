@@ -1,4 +1,5 @@
 from pathlib import Path
+import re
 
 ignored_directories = {".git", "node_modules", "__pycache__"}
 
@@ -24,13 +25,6 @@ security_sensitive_files = {
     "application.properties"
 }
 
-sensitive_keywords = {
-    "password",
-    "api_key",
-    "secret_key",
-    "token"
-}
-
 scannable_extensions = {
     ".py",
     ".js",
@@ -46,8 +40,56 @@ scannable_extensions = {
 }
 
 
-def scan_repository(project_path):
+def detect_hardcoded_secrets(content):
+    findings = []
 
+    pattern = re.compile(
+        r"""(?i)\b(password|api[_-]?key|secret[_-]?key|access[_-]?token|auth[_-]?token|token)\b\s*[:=]\s*(['"])(.*?)\2"""
+    )
+
+    placeholders = {
+        "",
+        "your_password",
+        "your_api_key",
+        "your_secret",
+        "your_token",
+        "placeholder",
+        "example",
+        "changeme",
+        "change_me",
+        "none",
+        "null",
+        "your-secret-here"
+    }
+
+    for line_no, line in enumerate(content.splitlines(), start=1):
+        stripped_line = line.strip()
+
+        if stripped_line.startswith(("#", "//", "*")):
+            continue
+
+        for match in pattern.finditer(line):
+            keyword = match.group(1).lower()
+            value = match.group(3).strip()
+
+            if value.lower() in placeholders:
+                continue
+
+            findings.append({
+                "type": "Potential Hardcoded Secret",
+                "severity": "Medium",
+                "keyword": keyword,
+                "line": line_no,
+                "description": (
+                    "A quoted value assigned to a credential-related "
+                    "field needs review."
+                )
+            })
+
+    return findings
+
+
+def scan_repository(project_path):
     file_count = 0
     file_types = {}
     readme_files = []
@@ -57,16 +99,21 @@ def scan_repository(project_path):
     security_findings = []
 
     for file in project_path.rglob("*"):
-
-        if file.is_file() and not any(part in ignored_directories for part in file.parts):
-            file_count = file_count + 1
+        if (
+            file.is_file()
+            and not any(
+                part in ignored_directories
+                for part in file.parts
+            )
+        ):
+            file_count += 1
             extension = file.suffix
-            
+
             if extension == "":
                 extension = "No extension"
 
             if extension in file_types:
-                file_types[extension] = file_types[extension] + 1
+                file_types[extension] += 1
             else:
                 file_types[extension] = 1
 
@@ -75,30 +122,28 @@ def scan_repository(project_path):
 
             if file.name in dependency_files:
                 dependency_files_found.append(file)
-
-                project_type = project_types[file.name]
-                project_types_found.add(project_type)
+                project_types_found.add(project_types[file.name])
 
             if file.name in security_sensitive_files:
                 security_files_found.append(file)
 
-            if file.suffix in scannable_extensions:
-                with open(file, "r") as current_file:
-                    content = current_file.read()
-                    for line_no, line in enumerate(content.splitlines(),start=1):
-                        for keyword in sensitive_keywords:
-                            if keyword in line and "=" in line:
-                                value = line.split("=")[1].strip()
-                                if value.startswith('"') or value.startswith("'"):
+            if file.suffix.lower() in scannable_extensions:
+                try:
+                    with open(
+                        file, "r", encoding="utf-8"
+                    ) as current_file:
+                        content = current_file.read()
 
-                                    security_findings.append({
-                                        "type": "Hardcoded Secret",
-                                        "severity": "High",
-                                        "keyword": keyword,
-                                        "file": str(file.relative_to(project_path)),
-                                        "line": line_no,
-                                        "description": "A possible hardcoded credential was found in the source code."
-                                    })
+                except (OSError, UnicodeDecodeError):
+                    continue
+
+                findings = detect_hardcoded_secrets(content)
+
+                for finding in findings:
+                    finding["file"] = str(
+                        file.relative_to(project_path)
+                    )
+                    security_findings.append(finding)
 
     return {
         "project": project_path.name,
@@ -112,20 +157,27 @@ def scan_repository(project_path):
     }
 
 
-repository_path = input("Enter repository path: ")
+def main():
+    repository_path = input("Enter repository path: ").strip()
+    project_path = Path(repository_path)
 
-project_path = Path(repository_path)
+    if not project_path.exists():
+        print("Repository path does not exist.")
 
-if not project_path.exists():
-    print("Repository path does not exist.")
-elif not project_path.is_dir():
-    print("The given path is not a directory.")
-else:
-    results = scan_repository(project_path)
+    elif not project_path.is_dir():
+        print("The given path is not a directory.")
 
-    print("Project:", results["project"])
-    print("Total files:", results["total_files"])
+    else:
+        results = scan_repository(project_path)
 
-    print("\nSecurity Findings:")
-    for finding in results["security_findings"]:
-        print(finding)
+        print("Project:", results["project"])
+        print("Total files:", results["total_files"])
+
+        print("\nSecurity Findings:")
+
+        for finding in results["security_findings"]:
+            print(finding)
+
+
+if __name__ == "__main__":
+    main()
